@@ -16,7 +16,7 @@
       }
       await new Promise(r => setTimeout(r, 300));
     }
-    return { ok: false, error: 'Background service worker not responding after retries' };
+    return { ok: false, error: 'Background not responding' };
   }
 
   // Listen for messages from the web page
@@ -26,50 +26,44 @@
     if (!event.data.type.startsWith('SBL_')) return;
     if (event.data.type === 'SBL_EXTENSION_READY') return;
     if (event.data.type.endsWith('_RESPONSE')) return;
+    if (event.data.type === 'SBL_HIRING_PROGRESS') return;
 
-    console.log('[SBL Content] Forwarding:', event.data.type, 'requestId:', event.data.requestId);
+    console.log('[SBL Content] Forwarding:', event.data.type);
 
-    const response = await sendToBackground({
-      type: event.data.type,
-      keywords: event.data.keywords,
-      count: event.data.count,
-      start: event.data.start
-    });
+    const response = await sendToBackground(event.data);
 
-    console.log('[SBL Content] Background responded:', JSON.stringify(response));
+    console.log('[SBL Content] Background responded:', event.data.type, response?.ok);
 
     window.postMessage({
       type: event.data.type + '_RESPONSE',
       requestId: event.data.requestId,
-      ok: response?.ok || false,
-      loggedIn: response?.loggedIn || false,
-      hasJsessionid: response?.hasJsessionid || false,
-      reason: response?.reason || '',
-      leads: response?.leads || [],
-      error: response?.error || ''
+      ...response
     }, '*');
   });
 
-  // Check auth on load and include status in READY message
+  // Listen for progress broadcasts from background (pushed, not polled)
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === 'SBL_HIRING_PROGRESS') {
+      // Forward to web page
+      window.postMessage(message, '*');
+    }
+    return false;
+  });
+
+  // Check auth on load and announce READY
   async function announceReady() {
     let authStatus = { loggedIn: false };
     try {
       authStatus = await sendToBackground({ type: 'SBL_CHECK_AUTH' });
-    } catch (e) {
-      console.log('[SBL Content] Auth pre-check failed:', e);
-    }
-
-    console.log('[SBL Content] Announcing READY, auth:', JSON.stringify(authStatus));
+    } catch (e) {}
 
     window.postMessage({
-      type: 'SBL_EXTENSION_READY',
-      version: '1.0.0',
+      type: 'SBL_EXTENSION_READY', version: '1.1.0',
       loggedIn: authStatus?.loggedIn || false,
       hasJsessionid: authStatus?.hasJsessionid || false
     }, '*');
   }
 
-  // Announce multiple times to handle timing
   announceReady();
   setTimeout(announceReady, 1000);
   setTimeout(announceReady, 3000);
