@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "Leads by SBL",
+  "version": "1.0.0",
+  "description": "LinkedIn lead search extension for LeadGen Pro",
+  "permissions": [
+    "cookies"
+  ],
+  "host_permissions": [
+    "https://www.linkedin.com/*",
+    "https://*.linkedin.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://localhost:*/*",
+        "https://*.trycloudflare.com/*",
+        "http://3.86.220.212:*/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "externally_connectable": {
+    "matches": [
+      "http://localhost:*/*",
+      "https://*.trycloudflare.com/*"
+    ]
+  }
+}
