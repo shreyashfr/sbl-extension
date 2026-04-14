@@ -370,7 +370,7 @@ async function fetchWellfoundExt(role, location, count) {
 
 async function findDecisionMakers(cookies, companies, role) {
   const leads = [];
-  const maxCompanies = Math.min(companies.length, 30);
+  const maxCompanies = Math.min(companies.length, 15);
 
   for (let i = 0; i < maxCompanies; i++) {
     const c = companies[i];
@@ -413,7 +413,7 @@ async function findDecisionMakers(cookies, companies, role) {
       }
 
       // Rate limit: delay between company lookups
-      if (i < maxCompanies - 1) await sleep(1500);
+      if (i < maxCompanies - 1) await sleep(1000);
     } catch (e) {
       console.log('[SBL Hiring] DM search failed for', companyName, e.message);
     }
