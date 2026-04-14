@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { width: 280px; padding: 16px; font-family: 'Segoe UI', Arial, sans-serif; font-size: 13px; color: #333; }
+    h3 { margin: 0 0 12px; font-size: 15px; }
+    .status { padding: 8px 12px; border-radius: 6px; margin-bottom: 10px; font-size: 12px; }
+    .ok { background: #f0fdf4; color: #16a34a; }
+    .err { background: #fef2f2; color: #dc2626; }
+    .warn { background: #fefce8; color: #ca8a04; }
+    .info { color: #6b7280; font-size: 11px; line-height: 1.5; margin-top: 8px; }
+    #details { margin-top: 8px; font-size: 11px; color: #888; }
+  </style>
+</head>
+<body>
+  <h3>Leads by SBL</h3>
+  <div id="statusBox" class="status">Checking LinkedIn session...</div>
+  <div id="details"></div>
+  <div class="info">This extension searches LinkedIn using your logged-in session. Use it from the LeadGen Pro dashboard.</div>
+  <script src="popup.js"></script>
+</body>
+</html>

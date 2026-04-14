@@ -1,11 +1,16 @@
 // Leads by SBL - Background Service Worker
 // Handles LinkedIn API calls using the user's authenticated session
 
-// Get LinkedIn cookies from the browser
+// Get LinkedIn cookies from the browser using getAll (more reliable than get)
 async function getLinkedInCookies() {
-  const li_at = await chrome.cookies.get({ url: 'https://www.linkedin.com', name: 'li_at' });
-  const jsessionid = await chrome.cookies.get({ url: 'https://www.linkedin.com', name: 'JSESSIONID' });
-  const li_a = await chrome.cookies.get({ url: 'https://www.linkedin.com', name: 'li_a' });
+  const allCookies = await chrome.cookies.getAll({ domain: '.linkedin.com' });
+
+  const li_at = allCookies.find(c => c.name === 'li_at');
+  const jsessionid = allCookies.find(c => c.name === 'JSESSIONID');
+  const li_a = allCookies.find(c => c.name === 'li_a');
+
+  console.log('[SBL] Cookie check — li_at:', !!li_at, 'JSESSIONID:', !!jsessionid, 'li_a:', !!li_a);
+  console.log('[SBL] Total linkedin cookies found:', allCookies.length);
 
   if (!li_at?.value) {
     throw new Error('NOT_LOGGED_IN');
@@ -13,6 +18,10 @@ async function getLinkedInCookies() {
 
   // JSESSIONID sometimes has quotes around it
   const csrf = jsessionid?.value?.replace(/"/g, '') || '';
+
+  if (!csrf) {
+    throw new Error('NO_CSRF_TOKEN');
+  }
 
   return {
     li_at: li_at.value,
@@ -29,7 +38,6 @@ async function voyagerPeopleSearch(keywords, start = 0, count = 25) {
   const url = `https://www.linkedin.com/voyager/api/graphql?includeWebMetadata=true&variables=(start:${start},origin:GLOBAL_SEARCH_HEADER,query:(keywords:${encoded},flagshipSearchIntent:SEARCH_SRP,queryParameters:List((key:resultType,value:List(PEOPLE))),includeFiltersInResponse:false))&queryId=voyagerSearchDashClusters.b0928897b71bd00a5a7291755dcd64f0`;
 
   const headers = {
-    'Cookie': `li_at=${cookies.li_at}; JSESSIONID="${cookies.jsessionid}"`,
     'csrf-token': cookies.jsessionid,
     'x-li-lang': 'en_US',
     'x-li-track': JSON.stringify({
@@ -45,11 +53,17 @@ async function voyagerPeopleSearch(keywords, start = 0, count = 25) {
       displayHeight: 1080
     }),
     'x-restli-protocol-version': '2.0.0',
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
     'Accept': 'application/vnd.linkedin.normalized+json+2.1'
   };
 
-  const resp = await fetch(url, { headers });
+  console.log('[SBL] Fetching Voyager API for:', keywords);
+
+  const resp = await fetch(url, {
+    headers,
+    credentials: 'include'
+  });
+
+  console.log('[SBL] Voyager response status:', resp.status);
 
   if (!resp.ok) {
     const status = resp.status;
@@ -95,6 +109,7 @@ function parseVoyagerResults(data, maxCount) {
     if (leads.length >= maxCount) break;
   }
 
+  console.log('[SBL] Parsed', leads.length, 'leads from Voyager response');
   return leads;
 }
 
@@ -102,7 +117,6 @@ function parseVoyagerResults(data, maxCount) {
 function parseHeadline(headline) {
   if (!headline) return { role: '', company: '' };
 
-  // Common patterns: "Role at Company", "Role @ Company", "Role | Company"
   const separators = [' at ', ' @ ', ' | '];
   for (const sep of separators) {
     const idx = headline.indexOf(sep);
@@ -123,17 +137,23 @@ async function checkLinkedInAuth() {
     const cookies = await getLinkedInCookies();
     return { loggedIn: true, hasJsessionid: !!cookies.jsessionid };
   } catch (e) {
-    return { loggedIn: false, hasJsessionid: false };
+    console.log('[SBL] Auth check failed:', e.message);
+    return { loggedIn: false, hasJsessionid: false, reason: e.message };
   }
 }
 
 // Listen for messages from content script
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  console.log('[SBL] Got message:', message.type);
+
   if (message.type === 'SBL_SEARCH') {
     voyagerPeopleSearch(message.keywords, message.start || 0, message.count || 25)
       .then(leads => sendResponse({ ok: true, leads }))
-      .catch(err => sendResponse({ ok: false, error: err.message }));
-    return true; // Keep channel open for async response
+      .catch(err => {
+        console.error('[SBL] Search error:', err.message);
+        sendResponse({ ok: false, error: err.message });
+      });
+    return true;
   }
 
   if (message.type === 'SBL_CHECK_AUTH') {
@@ -145,6 +165,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'SBL_PING') {
     sendResponse({ ok: true, version: '1.0.0' });
-    return false;
+    return true;
   }
+
+  return false;
 });

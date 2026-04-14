@@ -2,23 +2,38 @@
 // Bridges messages between the web app and the extension's background service worker
 
 (function() {
+  console.log('[SBL Content] Extension content script loaded on:', window.location.href);
+
   // Listen for messages from the web page
   window.addEventListener('message', async (event) => {
-    // Only accept messages from the same window
     if (event.source !== window) return;
-    if (!event.data || !event.data.type?.startsWith('SBL_')) return;
+    if (!event.data || typeof event.data.type !== 'string') return;
+
+    // Only forward request messages (not READY or RESPONSE)
+    if (!event.data.type.startsWith('SBL_')) return;
+    if (event.data.type === 'SBL_EXTENSION_READY') return;
+    if (event.data.type.endsWith('_RESPONSE')) return;
+
+    console.log('[SBL Content] Forwarding to background:', event.data.type);
 
     try {
-      // Forward to background service worker
-      const response = await chrome.runtime.sendMessage(event.data);
+      const response = await chrome.runtime.sendMessage({
+        type: event.data.type,
+        keywords: event.data.keywords,
+        count: event.data.count,
+        start: event.data.start,
+        requestId: event.data.requestId
+      });
 
-      // Send response back to the web page
+      console.log('[SBL Content] Got response from background:', response);
+
       window.postMessage({
         type: event.data.type + '_RESPONSE',
         requestId: event.data.requestId,
         ...response
       }, '*');
     } catch (err) {
+      console.error('[SBL Content] Error:', err);
       window.postMessage({
         type: event.data.type + '_RESPONSE',
         requestId: event.data.requestId,
@@ -28,6 +43,14 @@
     }
   });
 
-  // Announce that extension is loaded
-  window.postMessage({ type: 'SBL_EXTENSION_READY', version: '1.0.0' }, '*');
+  // Announce that extension is loaded — retry a few times in case app.js isn't ready yet
+  function announce() {
+    console.log('[SBL Content] Announcing extension ready');
+    window.postMessage({ type: 'SBL_EXTENSION_READY', version: '1.0.0' }, '*');
+  }
+
+  announce();
+  setTimeout(announce, 500);
+  setTimeout(announce, 1500);
+  setTimeout(announce, 3000);
 })();

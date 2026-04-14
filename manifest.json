@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Leads by SBL",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "LinkedIn lead search extension for LeadGen Pro",
   "permissions": [
     "cookies"
@@ -10,6 +10,10 @@
     "https://www.linkedin.com/*",
     "https://*.linkedin.com/*"
   ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Leads by SBL"
+  },
   "background": {
     "service_worker": "background.js"
   },
