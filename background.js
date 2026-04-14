@@ -38,6 +38,7 @@ async function voyagerPeopleSearch(keywords, start = 0, count = 25) {
   const url = `https://www.linkedin.com/voyager/api/graphql?includeWebMetadata=true&variables=(start:${start},origin:GLOBAL_SEARCH_HEADER,query:(keywords:${encoded},flagshipSearchIntent:SEARCH_SRP,queryParameters:List((key:resultType,value:List(PEOPLE))),includeFiltersInResponse:false))&queryId=voyagerSearchDashClusters.b0928897b71bd00a5a7291755dcd64f0`;
 
   const headers = {
+    'Cookie': `li_at=${cookies.li_at}; JSESSIONID="${cookies.jsessionid}"; li_a=${cookies.li_a}`,
     'csrf-token': cookies.jsessionid,
     'x-li-lang': 'en_US',
     'x-li-track': JSON.stringify({
@@ -58,22 +59,23 @@ async function voyagerPeopleSearch(keywords, start = 0, count = 25) {
 
   console.log('[SBL] Fetching Voyager API for:', keywords);
 
-  const resp = await fetch(url, {
-    headers,
-    credentials: 'include'
-  });
+  const resp = await fetch(url, { headers });
 
   console.log('[SBL] Voyager response status:', resp.status);
 
   if (!resp.ok) {
     const status = resp.status;
+    let body = '';
+    try { body = await resp.text(); } catch(e) {}
+    console.error('[SBL] Voyager error', status, body.substring(0, 500));
     if (status === 401 || status === 403) {
       throw new Error('AUTH_EXPIRED');
     }
-    throw new Error(`VOYAGER_ERROR:${status}`);
+    throw new Error(`LinkedIn API returned ${status}`);
   }
 
   const data = await resp.json();
+  console.log('[SBL] Voyager response keys:', Object.keys(data), 'included count:', (data.included || []).length);
   return parseVoyagerResults(data, count);
 }
 
