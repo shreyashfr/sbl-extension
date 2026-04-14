@@ -380,6 +380,201 @@ async function fetchWellfoundExt(role, location, count) {
   return { companies, source: 'Wellfound' };
 }
 
+// --- Indeed via Serper API ---
+async function fetchIndeedExt(role, location, count, serperKey) {
+  if (!serperKey) { console.log('[SBL Hiring] Indeed: no Serper key'); return { companies: [], source: 'Indeed' }; }
+  console.log('[SBL Hiring] Indeed:', role, location);
+  const companies = [];
+  const seen = new Set();
+
+  try {
+    // Request 1: Indeed job listings
+    const resp = await fetch('https://google.serper.dev/search', {
+      method: 'POST',
+      headers: { 'X-API-KEY': serperKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ q: `site:indeed.com/viewjob "${role}" "${location}"`, num: Math.min(count + 5, 20) })
+    });
+    if (!resp.ok) { console.log('[SBL Hiring] Indeed Serper status:', resp.status); return { companies: [], source: 'Indeed' }; }
+    const data = await resp.json();
+
+    for (const r of (data.organic || [])) {
+      if (companies.length >= count) break;
+      const title = r.title || '';
+      const url = r.link || '';
+      const snippet = r.snippet || '';
+
+      let companyName = null;
+      let jobTitle = null;
+
+      // Pattern: "Job Title - Company Name - Location | Indeed.com"
+      const parts = title.replace(/\s*\|.*$/, '').split(/\s+-\s+/);
+      if (parts.length >= 2) {
+        jobTitle = parts[0].trim();
+        companyName = parts[1].trim().replace(/,\s*[A-Z]{2}\s*\d*$/, '').trim();
+      }
+
+      if (!companyName && snippet) {
+        const snippetMatch = snippet.match(/^([A-Z][A-Za-z0-9\s&.,'-]+?)\s+(?:\d+\.\d+|rating|posted|hiring|ago)/i);
+        if (snippetMatch) companyName = snippetMatch[1].trim();
+      }
+
+      if (companyName && companyName.length > 1 && companyName.length < 80) {
+        companyName = companyName.replace(/\s*(Jobs?|Careers?|Hiring|Indeed|LLC|Inc\.?)\s*$/i, '').trim();
+        const key = companyName.toLowerCase();
+        if (!seen.has(key)) {
+          seen.add(key);
+          companies.push({
+            name: companyName, jobTitle: jobTitle || role, roleHiringFor: jobTitle || role,
+            jobPostUrl: url, companyPageUrl: url,
+            source: 'Indeed', sourcePlatform: 'Indeed'
+          });
+        }
+      }
+    }
+
+    // Broader search if few results
+    if (companies.length < Math.min(count, 3)) {
+      await sleep(1000);
+      const resp2 = await fetch('https://google.serper.dev/search', {
+        method: 'POST',
+        headers: { 'X-API-KEY': serperKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ q: `site:indeed.com "${role}" jobs hiring ${location}`, num: Math.min(count + 5, 15), tbs: 'qdr:m' })
+      });
+      if (resp2.ok) {
+        const data2 = await resp2.json();
+        for (const r of (data2.organic || [])) {
+          if (companies.length >= count) break;
+          const title = r.title || '';
+          const url = r.link || '';
+          if (!url.includes('indeed.com')) continue;
+          if (/\/cmp\/|\/career\/|\/salary\//.test(url)) continue;
+
+          let companyName = null;
+          const parts = title.replace(/\s*\|.*$/, '').split(/\s+-\s+/);
+          if (parts.length >= 2) companyName = parts[1].trim().replace(/,\s*[A-Z]{2}\s*\d*$/, '').trim();
+          if (companyName && companyName.length > 1 && companyName.length < 80) {
+            companyName = companyName.replace(/\s*(Jobs?|Careers?|Hiring|Indeed)\s*$/i, '').trim();
+            const key = companyName.toLowerCase();
+            if (!seen.has(key)) {
+              seen.add(key);
+              companies.push({
+                name: companyName, jobTitle: title.replace(/\s*\|.*$/, '').split(' - ')[0].trim(),
+                roleHiringFor: title.replace(/\s*\|.*$/, '').split(' - ')[0].trim(),
+                jobPostUrl: url, companyPageUrl: url,
+                source: 'Indeed', sourcePlatform: 'Indeed'
+              });
+            }
+          }
+        }
+      }
+    }
+  } catch (e) { console.error('[SBL Hiring] Indeed error:', e.message); }
+
+  console.log('[SBL Hiring] Indeed found:', companies.length);
+  return { companies, source: 'Indeed' };
+}
+
+// --- Glassdoor via Serper API ---
+async function fetchGlassdoorExt(role, location, count, serperKey) {
+  if (!serperKey) { console.log('[SBL Hiring] Glassdoor: no Serper key'); return { companies: [], source: 'Glassdoor' }; }
+  console.log('[SBL Hiring] Glassdoor:', role, location);
+  const companies = [];
+  const seen = new Set();
+
+  try {
+    const resp = await fetch('https://google.serper.dev/search', {
+      method: 'POST',
+      headers: { 'X-API-KEY': serperKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ q: `site:glassdoor.com/job-listing "${role}" "${location}"`, num: Math.min(count + 5, 20) })
+    });
+    if (!resp.ok) { console.log('[SBL Hiring] Glassdoor Serper status:', resp.status); return { companies: [], source: 'Glassdoor' }; }
+    const data = await resp.json();
+
+    for (const r of (data.organic || [])) {
+      if (companies.length >= count) break;
+      const title = r.title || '';
+      const url = r.link || '';
+      const snippet = r.snippet || '';
+
+      let companyName = null;
+
+      // "TITLE - COMPANY | Glassdoor"
+      const pipeMatch = title.match(/^.+?\s*-\s*(.+?)\s*\|/);
+      if (pipeMatch) companyName = pipeMatch[1].replace(/\s+in\s+.+$/, '').trim();
+
+      // "Company hiring Title in Location | Glassdoor"
+      if (!companyName) {
+        const hiringMatch = title.match(/^(.+?)\s+(?:hiring|is hiring)\s+/i);
+        if (hiringMatch) companyName = hiringMatch[1].trim();
+      }
+
+      if (!companyName && snippet) {
+        const snippetMatch = snippet.match(/^([A-Z][A-Za-z0-9\s&.,'-]+?)\s+(?:\d+\.\d+|rating|Review|hiring|posted)/i);
+        if (snippetMatch) companyName = snippetMatch[1].trim();
+      }
+
+      if (companyName && companyName.length > 1 && companyName.length < 80) {
+        companyName = companyName.replace(/\s*(Jobs?|Careers?|Hiring|Glassdoor|LLC|Inc\.?)\s*$/i, '').trim();
+        const key = companyName.toLowerCase();
+        if (!seen.has(key)) {
+          seen.add(key);
+          companies.push({
+            name: companyName,
+            jobTitle: title.replace(/\s*\|.*$/, '').replace(/\s*-\s*Glassdoor.*$/, '').split(' - ')[0].trim(),
+            roleHiringFor: title.replace(/\s*\|.*$/, '').replace(/\s*-\s*Glassdoor.*$/, '').split(' - ')[0].trim(),
+            jobPostUrl: url, companyPageUrl: url,
+            source: 'Glassdoor', sourcePlatform: 'Glassdoor'
+          });
+        }
+      }
+    }
+
+    // Broader search if few results
+    if (companies.length < Math.min(count, 3)) {
+      await sleep(1000);
+      const resp2 = await fetch('https://google.serper.dev/search', {
+        method: 'POST',
+        headers: { 'X-API-KEY': serperKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ q: `site:glassdoor.com "${role}" jobs hiring`, num: Math.min(count + 5, 15), tbs: 'qdr:m' })
+      });
+      if (resp2.ok) {
+        const data2 = await resp2.json();
+        for (const r of (data2.organic || [])) {
+          if (companies.length >= count) break;
+          const title = r.title || '';
+          const url = r.link || '';
+          if (!url.includes('glassdoor.com') || /\/Reviews\/|\/Salary\/|\/Interview\//.test(url)) continue;
+
+          let companyName = null;
+          const pipeMatch = title.match(/^.+?\s*-\s*(.+?)\s*\|/);
+          if (pipeMatch) companyName = pipeMatch[1].replace(/\s+in\s+.+$/, '').trim();
+          if (!companyName) {
+            const hiringMatch = title.match(/^(.+?)\s+(?:hiring|is hiring)\s+/i);
+            if (hiringMatch) companyName = hiringMatch[1].trim();
+          }
+          if (companyName && companyName.length > 1 && companyName.length < 80) {
+            companyName = companyName.replace(/\s*(Jobs?|Careers?|Hiring|Glassdoor)\s*$/i, '').trim();
+            const key = companyName.toLowerCase();
+            if (!seen.has(key)) {
+              seen.add(key);
+              companies.push({
+                name: companyName,
+                jobTitle: title.replace(/\s*\|.*$/, '').split(' - ')[0].trim(),
+                roleHiringFor: title.replace(/\s*\|.*$/, '').split(' - ')[0].trim(),
+                jobPostUrl: url, companyPageUrl: url,
+                source: 'Glassdoor', sourcePlatform: 'Glassdoor'
+              });
+            }
+          }
+        }
+      }
+    }
+  } catch (e) { console.error('[SBL Hiring] Glassdoor error:', e.message); }
+
+  console.log('[SBL Hiring] Glassdoor found:', companies.length);
+  return { companies, source: 'Glassdoor' };
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 // DECISION MAKER SEARCH (Voyager)
 // ══════════════════════════════════════════════════════════════════════════════
@@ -443,19 +638,30 @@ async function findDecisionMakers(cookies, companies, role) {
 // FULL HIRING PIPELINE
 // ══════════════════════════════════════════════════════════════════════════════
 
+// Get stored Serper API key
+async function getSerperKey() {
+  try {
+    const data = await chrome.storage.local.get('serperKey');
+    return data.serperKey || '';
+  } catch { return ''; }
+}
+
 async function runHiringScan(role, location, count, sendProgress) {
   const startTime = Date.now();
   const allCompanies = [];
   const sourceReport = {};
+  const serperKey = await getSerperKey();
 
   // Step 1: Fetch from all sources in parallel
-  sendProgress('step1_http', '10%', 'Fetching job boards...');
+  sendProgress('step1_http', '10%', 'Fetching job boards (6 sources)...');
 
   const results = await Promise.allSettled([
     fetchLinkedInJobsExt(role, location, count),
     fetchDiceExt(role, location, count),
     fetchYCExt(role, location, count),
-    fetchWellfoundExt(role, location, count)
+    fetchWellfoundExt(role, location, count),
+    fetchIndeedExt(role, location, count, serperKey),
+    fetchGlassdoorExt(role, location, count, serperKey)
   ]);
 
   for (const r of results) {
@@ -639,8 +845,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'SBL_SET_SERPER_KEY') {
+    chrome.storage.local.set({ serperKey: message.key })
+      .then(() => sendResponse({ ok: true }))
+      .catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+
+  if (message.type === 'SBL_GET_SERPER_KEY') {
+    getSerperKey()
+      .then(key => sendResponse({ ok: true, hasKey: !!key, keyPreview: key ? key.substring(0, 8) + '...' : '' }))
+      .catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+
   if (message.type === 'SBL_PING') {
-    sendResponse({ ok: true, version: '1.1.0' });
+    sendResponse({ ok: true, version: '2.0.0' });
     return true;
   }
 

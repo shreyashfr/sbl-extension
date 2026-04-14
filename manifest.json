@@ -4,7 +4,8 @@
   "version": "2.0.0",
   "description": "LinkedIn lead search extension for LeadGen Pro",
   "permissions": [
-    "cookies"
+    "cookies",
+    "storage"
   ],
   "host_permissions": [
     "https://www.linkedin.com/*",
@@ -13,7 +14,8 @@
     "https://www.workatastartup.com/*",
     "https://*.algolia.net/*",
     "https://www.google.com/*",
-    "https://wellfound.com/*"
+    "https://wellfound.com/*",
+    "https://google.serper.dev/*"
   ],
   "action": {
     "default_popup": "popup.html",
