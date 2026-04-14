@@ -121,30 +121,51 @@ async function fetchLinkedInJobsExt(role, location, count) {
       const params = new URLSearchParams({
         keywords: role, location: location, f_TPR: 'r604800', start: String(page * perPage)
       });
+      // Use redirect: 'follow' and explicitly avoid sending cookies
       const resp = await fetch(
         `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?${params}`,
-        { headers: { 'User-Agent': UA } }
+        { headers: { 'User-Agent': UA, 'Accept': 'text/html' }, credentials: 'omit', redirect: 'follow' }
       );
-      if (!resp.ok) { console.log('[SBL Hiring] LinkedIn Jobs status:', resp.status); break; }
+      console.log('[SBL Hiring] LinkedIn Jobs status:', resp.status, 'url:', resp.url);
+      if (!resp.ok) break;
       const html = await resp.text();
+      console.log('[SBL Hiring] LinkedIn Jobs HTML length:', html.length, 'first 200:', html.substring(0, 200));
 
       // Parse with regex (no cheerio in service worker)
+      // Try multiple patterns - LinkedIn changes class names
       const cards = html.split(/<li\b/i).slice(1);
+      console.log('[SBL Hiring] LinkedIn Jobs cards found:', cards.length);
+
       for (const card of cards) {
         if (companies.length >= count) break;
-        const companyMatch = card.match(/base-search-card__subtitle[^>]*>([^<]+)</i);
-        const titleMatch = card.match(/base-search-card__title[^>]*>([^<]+)</i) || card.match(/<h3[^>]*>([^<]+)</i);
-        const urlMatch = card.match(/href="(https:\/\/www\.linkedin\.com\/jobs\/view\/[^"?]+)/i);
-        const locMatch = card.match(/job-search-card__location[^>]*>([^<]+)/i) || card.match(/base-search-card__metadata[^>]*>([^<]+)/i);
-        const companyLinkMatch = card.match(/href="(https:\/\/www\.linkedin\.com\/company\/[^"?]+)/i);
+
+        // Multiple patterns for company name
+        const companyMatch = card.match(/base-search-card__subtitle[^>]*>\s*([^<]+)/i)
+          || card.match(/hidden-nested-link[^>]*>\s*([^<]+)/i)
+          || card.match(/<h4[^>]*>\s*([^<]+)/i)
+          || card.match(/data-tracking-control-name="[^"]*company[^"]*"[^>]*>\s*([^<]+)/i);
+
+        // Multiple patterns for job title
+        const titleMatch = card.match(/base-search-card__title[^>]*>\s*([^<]+)/i)
+          || card.match(/sr-only[^>]*>\s*([^<]+)/i)
+          || card.match(/<h3[^>]*>\s*([^<]+)/i);
+
+        const urlMatch = card.match(/href="(https?:\/\/[^"]*linkedin\.com\/jobs\/view\/[^"?]+)/i)
+          || card.match(/href="(\/jobs\/view\/[^"?]+)/i);
+
+        const locMatch = card.match(/job-search-card__location[^>]*>\s*([^<]+)/i)
+          || card.match(/base-search-card__metadata[^>]*>\s*([^<]+)/i);
+
+        const companyLinkMatch = card.match(/href="(https?:\/\/[^"]*linkedin\.com\/company\/[^"?]+)/i);
 
         const companyName = companyMatch?.[1]?.trim();
         if (companyName && companyName.length > 1) {
+          const jobUrl = urlMatch?.[1] || '';
           companies.push({
             name: companyName,
             jobTitle: titleMatch?.[1]?.trim() || role,
             roleHiringFor: titleMatch?.[1]?.trim() || role,
-            jobPostUrl: urlMatch?.[1] || '',
+            jobPostUrl: jobUrl.startsWith('/') ? `https://www.linkedin.com${jobUrl}` : jobUrl,
             linkedinCompanyUrl: companyLinkMatch?.[1] || '',
             location: locMatch?.[1]?.trim() || location,
             source: 'LinkedIn Jobs',
