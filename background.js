@@ -342,41 +342,64 @@ async function fetchYCExt(role, location, count) {
   return { companies, source: 'YC' };
 }
 
-// --- Wellfound via Google (no Serper key needed — use direct Google search) ---
-async function fetchWellfoundExt(role, location, count) {
+// --- Wellfound via Serper API ---
+async function fetchWellfoundExt(role, location, count, serperKey) {
+  if (!serperKey) { console.log('[SBL Hiring] Wellfound: no Serper key'); return { companies: [], source: 'Wellfound' }; }
   console.log('[SBL Hiring] Wellfound:', role, location);
   const companies = [];
   try {
-    // Use Google search directly from extension (no CORS in service worker)
-    const q = encodeURIComponent(`site:wellfound.com ${role} jobs ${location}`);
-    const resp = await fetch(`https://www.google.com/search?q=${q}&num=${Math.min(count, 20)}`, {
-      headers: { 'User-Agent': UA, 'Accept': 'text/html' }
+    const resp = await fetch('https://google.serper.dev/search', {
+      method: 'POST',
+      headers: { 'X-API-KEY': serperKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ q: `site:wellfound.com ${role} jobs ${location}`, num: Math.min(count, 20), tbs: 'qdr:w7' })
     });
-    if (!resp.ok) { console.log('[SBL Hiring] Google search returned', resp.status); return { companies: [], source: 'Wellfound' }; }
-    const html = await resp.text();
+    if (!resp.ok) { console.log('[SBL Hiring] Wellfound Serper status:', resp.status); return { companies: [], source: 'Wellfound' }; }
+    const data = await resp.json();
 
-    // Extract Wellfound URLs from Google results
-    const urlMatches = [...html.matchAll(/href="(https?:\/\/wellfound\.com\/company\/[^"&]+)"/g)];
     const seenCompanies = new Set();
-
-    for (const match of urlMatches) {
+    for (const r of (data.organic || [])) {
       if (companies.length >= count) break;
-      const url = match[1];
-      const companySlug = url.match(/wellfound\.com\/company\/([^\/]+)/)?.[1];
-      if (!companySlug || seenCompanies.has(companySlug)) continue;
-      seenCompanies.add(companySlug);
+      const rawTitle = (r.title || '').replace(/\s*[|·•-]\s*Wellfound.*$/i, '').trim();
+      const url = r.link || '';
+      const snippet = r.snippet || '';
 
-      const companyName = companySlug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-      companies.push({
-        name: companyName,
-        jobTitle: role, roleHiringFor: role,
-        jobPostUrl: url,
-        companyPageUrl: url,
-        source: 'Wellfound', sourcePlatform: 'Wellfound'
-      });
+      const companyMatch = url.match(/wellfound\.com\/company\/([^\/]+)/i);
+      let companyName = '';
+      let jobTitle = '';
+
+      if (companyMatch) {
+        companyName = companyMatch[1].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).trim();
+      }
+
+      const atMatch = rawTitle.match(/^(.+?)\s+at\s+(.+)$/i);
+      const dashMatch = rawTitle.match(/^(.+?)\s+-\s+(.+)$/);
+      if (atMatch) {
+        jobTitle = atMatch[1].trim();
+        if (!companyName) companyName = atMatch[2].trim();
+      } else if (dashMatch) {
+        const titleLike = /(engineer|sales|account|manager|director|head|vp|founder|cto|ceo|developer|designer|marketing|recruiter|operations|executive)/i;
+        if (titleLike.test(dashMatch[1])) { jobTitle = dashMatch[1].trim(); if (!companyName) companyName = dashMatch[2].trim(); }
+        else { if (!companyName) companyName = dashMatch[1].trim(); jobTitle = dashMatch[2].trim(); }
+      } else {
+        jobTitle = rawTitle;
+      }
+
+      if (!companyName) {
+        const snippetAt = snippet.match(/at\s+([A-Z][A-Za-z0-9& .'-]+)/);
+        if (snippetAt) companyName = snippetAt[1].trim();
+      }
+
+      if (companyName && companyName.length > 1 && !seenCompanies.has(companyName.toLowerCase())) {
+        seenCompanies.add(companyName.toLowerCase());
+        companies.push({
+          name: companyName, jobTitle: jobTitle || role, roleHiringFor: jobTitle || role,
+          jobPostUrl: url, companyPageUrl: url,
+          source: 'Wellfound', sourcePlatform: 'Wellfound'
+        });
+      }
     }
-    console.log('[SBL Hiring] Wellfound found:', companies.length);
   } catch (e) { console.log('[SBL Hiring] Wellfound failed:', e.message); }
+  console.log('[SBL Hiring] Wellfound found:', companies.length);
   return { companies, source: 'Wellfound' };
 }
 
@@ -659,7 +682,7 @@ async function runHiringScan(role, location, count, sendProgress) {
     fetchLinkedInJobsExt(role, location, count),
     fetchDiceExt(role, location, count),
     fetchYCExt(role, location, count),
-    fetchWellfoundExt(role, location, count),
+    fetchWellfoundExt(role, location, count, serperKey),
     fetchIndeedExt(role, location, count, serperKey),
     fetchGlassdoorExt(role, location, count, serperKey)
   ]);
