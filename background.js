@@ -109,78 +109,73 @@ function parseHeadline(headline) {
 // HIRING SIGNAL SOURCES
 // ══════════════════════════════════════════════════════════════════════════════
 
-// --- LinkedIn Jobs Guest API (no auth needed) ---
+// --- LinkedIn Jobs via Voyager API (authenticated, uses your session) ---
 async function fetchLinkedInJobsExt(role, location, count) {
-  console.log('[SBL Hiring] LinkedIn Jobs:', role, location);
+  console.log('[SBL Hiring] LinkedIn Jobs (Voyager):', role, location);
   const companies = [];
-  const perPage = 25;
-  const pages = Math.ceil(Math.min(count, 50) / perPage);
 
-  for (let page = 0; page < pages && companies.length < count; page++) {
-    try {
-      const params = new URLSearchParams({
-        keywords: role, location: location, f_TPR: 'r604800', start: String(page * perPage)
-      });
-      // Use redirect: 'follow' and explicitly avoid sending cookies
-      const resp = await fetch(
-        `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?${params}`,
-        { headers: { 'User-Agent': UA, 'Accept': 'text/html' }, credentials: 'omit', redirect: 'follow' }
-      );
-      console.log('[SBL Hiring] LinkedIn Jobs status:', resp.status, 'url:', resp.url);
-      if (!resp.ok) break;
-      const html = await resp.text();
-      console.log('[SBL Hiring] LinkedIn Jobs HTML length:', html.length, 'first 200:', html.substring(0, 200));
+  try {
+    const cookies = await getLinkedInCookies();
+    const searchQuery = encodeURIComponent(role);
+    const locEncoded = encodeURIComponent(location);
+    const jobCount = Math.min(count, 50);
 
-      // Parse with regex (no cheerio in service worker)
-      // Try multiple patterns - LinkedIn changes class names
-      const cards = html.split(/<li\b/i).slice(1);
-      console.log('[SBL Hiring] LinkedIn Jobs cards found:', cards.length);
+    const url = `https://www.linkedin.com/voyager/api/voyagerJobsDashJobCards?decorationId=com.linkedin.voyager.dash.deco.jobs.search.JobSearchCardsCollection-220&count=${jobCount}&q=jobSearch&query=(origin:JOB_SEARCH_PAGE_OTHER_ENTRY,keywords:${searchQuery},locationUnion:(seoLocation:(location:${locEncoded})),spellCorrectionEnabled:true)&start=0`;
 
-      for (const card of cards) {
-        if (companies.length >= count) break;
+    const resp = await fetch(url, { headers: voyagerHeaders(cookies) });
+    console.log('[SBL Hiring] LinkedIn Jobs Voyager status:', resp.status);
 
-        // Multiple patterns for company name
-        const companyMatch = card.match(/base-search-card__subtitle[^>]*>\s*([^<]+)/i)
-          || card.match(/hidden-nested-link[^>]*>\s*([^<]+)/i)
-          || card.match(/<h4[^>]*>\s*([^<]+)/i)
-          || card.match(/data-tracking-control-name="[^"]*company[^"]*"[^>]*>\s*([^<]+)/i);
-
-        // Multiple patterns for job title
-        const titleMatch = card.match(/base-search-card__title[^>]*>\s*([^<]+)/i)
-          || card.match(/sr-only[^>]*>\s*([^<]+)/i)
-          || card.match(/<h3[^>]*>\s*([^<]+)/i);
-
-        const urlMatch = card.match(/href="(https?:\/\/[^"]*linkedin\.com\/jobs\/view\/[^"?]+)/i)
-          || card.match(/href="(\/jobs\/view\/[^"?]+)/i);
-
-        const locMatch = card.match(/job-search-card__location[^>]*>\s*([^<]+)/i)
-          || card.match(/base-search-card__metadata[^>]*>\s*([^<]+)/i);
-
-        const companyLinkMatch = card.match(/href="(https?:\/\/[^"]*linkedin\.com\/company\/[^"?]+)/i);
-
-        const companyName = companyMatch?.[1]?.trim();
-        if (companyName && companyName.length > 1) {
-          const jobUrl = urlMatch?.[1] || '';
-          companies.push({
-            name: companyName,
-            jobTitle: titleMatch?.[1]?.trim() || role,
-            roleHiringFor: titleMatch?.[1]?.trim() || role,
-            jobPostUrl: jobUrl.startsWith('/') ? `https://www.linkedin.com${jobUrl}` : jobUrl,
-            linkedinCompanyUrl: companyLinkMatch?.[1] || '',
-            location: locMatch?.[1]?.trim() || location,
-            source: 'LinkedIn Jobs',
-            sourcePlatform: 'LinkedIn Jobs'
-          });
-        }
-      }
-      if (page < pages - 1) await sleep(500);
-    } catch (e) {
-      console.error('[SBL Hiring] LinkedIn Jobs error:', e.message);
-      break;
+    if (!resp.ok) {
+      console.log('[SBL Hiring] LinkedIn Jobs Voyager failed:', resp.status);
+      return { companies: [], source: 'LinkedIn Jobs' };
     }
+
+    const data = await resp.json();
+    const included = data.included || [];
+    console.log('[SBL Hiring] LinkedIn Jobs Voyager included items:', included.length);
+
+    for (const item of included) {
+      if (companies.length >= count) break;
+
+      try {
+        // Job posting cards have entityUrn with fsd_jobPostingCard
+        if (!item.entityUrn?.includes('fsd_jobPostingCard')) continue;
+
+        const jobTitle = item.jobPostingTitle?.text || item.title?.text || '';
+        const companyName = item.companyName?.text || item.primaryDescription?.text || '';
+        const jobId = item.jobPostingUrn?.split(':').pop() || '';
+        const jobLocation = item.secondaryDescription?.text || '';
+
+        if (!companyName || companyName.length < 2) continue;
+
+        companies.push({
+          name: companyName,
+          jobTitle: jobTitle || role,
+          roleHiringFor: jobTitle || role,
+          jobPostUrl: jobId ? `https://www.linkedin.com/jobs/view/${jobId}` : '',
+          linkedinCompanyUrl: '',
+          location: jobLocation || location,
+          source: 'LinkedIn Jobs',
+          sourcePlatform: 'LinkedIn Jobs'
+        });
+      } catch {}
+    }
+
+    // Dedupe
+    const seen = new Set();
+    const unique = companies.filter(c => {
+      const key = c.name.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    console.log('[SBL Hiring] LinkedIn Jobs found:', unique.length, '(from', companies.length, 'raw)');
+    return { companies: unique, source: 'LinkedIn Jobs' };
+  } catch (e) {
+    console.error('[SBL Hiring] LinkedIn Jobs error:', e.message);
+    return { companies: [], source: 'LinkedIn Jobs' };
   }
-  console.log('[SBL Hiring] LinkedIn Jobs found:', companies.length);
-  return { companies, source: 'LinkedIn Jobs' };
 }
 
 // --- Dice (public HTML scraping) ---
